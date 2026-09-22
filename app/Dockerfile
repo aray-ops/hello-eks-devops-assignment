@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.7
 
-FROM python:3.13.7-slim-bookworm
+FROM python:3.13.15-alpine3.23
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -8,12 +8,16 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 WORKDIR /app
 
-RUN groupadd --system --gid 10001 app \
-    && useradd \
+RUN addgroup \
         --system \
-        --uid 10001 \
         --gid 10001 \
+        app \
+    && adduser \
+        --system \
+        --disabled-password \
         --no-create-home \
+        --uid 10001 \
+        --ingroup app \
         app
 
 COPY requirements.txt ./
