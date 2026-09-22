@@ -66,6 +66,7 @@ data "aws_iam_policy_document" "github_actions_deploy" {
     effect = "Allow"
 
     actions = [
+      "ecr:BatchGetImage",
       "ecr:BatchCheckLayerAvailability",
       "ecr:CompleteLayerUpload",
       "ecr:DescribeImages",
