@@ -79,6 +79,11 @@ output "nat_gateway_public_ip" {
 }
 
 output "configure_kubectl_command" {
-  description = "Command used to configure kubectl for this EKS cluster."
+  description = "Command used to configure kubectl"
   value       = "aws eks update-kubeconfig --region ${var.aws_region} --name ${aws_eks_cluster.main.name} --profile eks-lab"
+}
+
+output "github_actions_deploy_role_arn" {
+  description = "IAM role assumed by GitHub Actions through OIDC"
+  value       = aws_iam_role.github_actions_deploy.arn
 }

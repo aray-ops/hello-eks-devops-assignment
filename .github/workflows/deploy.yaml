@@ -1,0 +1,164 @@
+name: Build, Scan, and Deploy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "app/**"
+      - "helm/**"
+      - ".github/workflows/deploy.yaml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: hello-app-production
+  cancel-in-progress: false
+
+env:
+  AWS_REGION: us-east-1
+  AWS_ACCOUNT_ID: "668471253381"
+  ECR_REPOSITORY: hello-eks-app
+  EKS_CLUSTER_NAME: hello-eks-devops
+  HELM_RELEASE: hello-app
+  KUBERNETES_NAMESPACE: hello-app
+
+jobs:
+  build-scan-deploy:
+    name: Build, scan, and deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials with OIDC
+        uses: aws-actions/configure-aws-credentials@v6.3.0
+        with:
+          role-to-assume: arn:aws:iam::668471253381:role/hello-eks-devops-github-actions-deploy
+          role-session-name: github-actions-${{ github.run_id }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Sign in to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Generate immutable image tag
+        shell: bash
+        run: |
+          IMAGE_TAG="sha-${GITHUB_SHA::12}"
+          echo "IMAGE_TAG=${IMAGE_TAG}" >> "${GITHUB_ENV}"
+          echo "ECR_URI=${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com/${ECR_REPOSITORY}" >> "${GITHUB_ENV}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push container image
+        uses: docker/build-push-action@v7
+        with:
+          context: ./app
+          file: ./app/Dockerfile
+          platforms: linux/amd64
+          push: true
+          provenance: false
+          sbom: false
+          tags: ${{ env.ECR_URI }}:${{ env.IMAGE_TAG }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Wait for ECR vulnerability scan
+        shell: bash
+        run: |
+          aws ecr wait image-scan-complete \
+            --repository-name "${ECR_REPOSITORY}" \
+            --image-id imageTag="${IMAGE_TAG}"
+
+      - name: Enforce vulnerability policy
+        shell: bash
+        run: |
+          CRITICAL_COUNT="$(
+            aws ecr describe-image-scan-findings \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-id imageTag="${IMAGE_TAG}" \
+              --query 'imageScanFindings.findingSeverityCounts.CRITICAL' \
+              --output text
+          )"
+
+          HIGH_COUNT="$(
+            aws ecr describe-image-scan-findings \
+              --repository-name "${ECR_REPOSITORY}" \
+              --image-id imageTag="${IMAGE_TAG}" \
+              --query 'imageScanFindings.findingSeverityCounts.HIGH' \
+              --output text
+          )"
+
+          [[ "${CRITICAL_COUNT}" == "None" ]] && CRITICAL_COUNT=0
+          [[ "${HIGH_COUNT}" == "None" ]] && HIGH_COUNT=0
+
+          echo "Critical findings: ${CRITICAL_COUNT}"
+          echo "High findings: ${HIGH_COUNT}"
+
+          if (( CRITICAL_COUNT > 0 || HIGH_COUNT > 0 )); then
+            echo "Deployment blocked because the image contains critical or high vulnerabilities."
+            exit 1
+          fi
+
+      - name: Configure kubectl
+        shell: bash
+        run: |
+          aws eks update-kubeconfig \
+            --region "${AWS_REGION}" \
+            --name "${EKS_CLUSTER_NAME}"
+
+          kubectl version --client
+          kubectl auth can-i patch deployments \
+            --namespace "${KUBERNETES_NAMESPACE}"
+
+      - name: Deploy with Helm
+        shell: bash
+        run: |
+          helm lint helm/hello-app
+
+          helm upgrade --install "${HELM_RELEASE}" helm/hello-app \
+            --namespace "${KUBERNETES_NAMESPACE}" \
+            --set-string image.repository="${ECR_URI}" \
+            --set-string image.tag="${IMAGE_TAG}" \
+            --atomic \
+            --wait \
+            --timeout 5m
+
+      - name: Verify Kubernetes rollout
+        shell: bash
+        run: |
+          kubectl rollout status deployment/hello-app \
+            --namespace "${KUBERNETES_NAMESPACE}" \
+            --timeout=5m
+
+          kubectl get pods \
+            --namespace "${KUBERNETES_NAMESPACE}" \
+            --output=wide
+
+      - name: Test public endpoint
+        shell: bash
+        run: |
+          APP_HOSTNAME="$(
+            kubectl get service hello-app \
+              --namespace "${KUBERNETES_NAMESPACE}" \
+              --output=jsonpath='{.status.loadBalancer.ingress[0].hostname}'
+          )"
+
+          test -n "${APP_HOSTNAME}"
+          echo "Testing http://${APP_HOSTNAME}"
+
+          curl \
+            --fail \
+            --show-error \
+            --silent \
+            --retry 12 \
+            --retry-delay 10 \
+            --retry-all-errors \
+            "http://${APP_HOSTNAME}/healthz"
