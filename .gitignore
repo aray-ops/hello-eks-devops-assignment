@@ -1,0 +1,60 @@
+# macOS
+.DS_Store
+
+# Visual Studio Code
+.vscode/
+*.code-workspace
+
+# Environment files and secrets
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
+# Terraform working directories
+**/.terraform/*
+
+# Terraform state files
+*.tfstate
+*.tfstate.*
+
+# Terraform plan files
+*.tfplan
+tfplan
+
+# Terraform variable files that may contain sensitive values
+*.tfvars
+*.tfvars.json
+!*.tfvars.example
+
+# Terraform crash and override files
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Terraform CLI configuration
+.terraformrc
+terraform.rc
+
+# Kubernetes configuration and secrets
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+
+# Helm generated packages
+*.tgz
+
+# Docker and application artifacts
+*.log
+dist/
+build/
+coverage/
